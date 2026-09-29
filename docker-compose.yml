@@ -1,0 +1,29 @@
+services:
+  cerberus-ti:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${CERBERUS_BIND_IP:-127.0.0.1}:8080:8080"
+    environment:
+      URLHAUS_AUTH_KEY: ${URLHAUS_AUTH_KEY:-}
+      THREATFOX_AUTH_KEY: ${THREATFOX_AUTH_KEY:-}
+      CERBERUS_DATABASE_URL: sqlite:////data/cerberus.db
+    volumes:
+      - cerberus-data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 5m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  cerberus-data:

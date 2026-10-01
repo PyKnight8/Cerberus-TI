@@ -10,13 +10,34 @@ policy:
       enabled: true
       allow_unknown_confidence: true  # Explicit trust in online URLhaus evidence.
       min_confidence: 80
+    otx:
+      enabled: true
+      allow_unknown_confidence: false
+      min_confidence: 80
     threatfox:
       enabled: true
       allow_unknown_confidence: false
       min_confidence: 80
 allowlist:
   domains: []  # Entries protect the exact name AND its subdomains.
+enrichment:
+  cache_ttl_hours: 24
 providers:
+  otx:
+    enabled: false
+    max_pages: 100
+    retrieval_strategy: auto
+    endpoint_cooldown_minutes: 360
+    page_size: 10
+    initial_lookback_days: 90  # Set null to include full history.
+    transient_retries: 2
+    retry_backoff_seconds: 5
+    incremental: true
+    overlap_minutes: 5
+    http:
+      connect_timeout_seconds: 10
+      read_timeout_seconds: 120
+      total_timeout_seconds: 180
   urlhaus:
     enabled: true
   threatfox:

@@ -8,6 +8,9 @@ services:
     environment:
       URLHAUS_AUTH_KEY: ${URLHAUS_AUTH_KEY:-}
       THREATFOX_AUTH_KEY: ${THREATFOX_AUTH_KEY:-}
+      OTX_API_KEY: ${OTX_API_KEY:-}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+      CERBERUS_SECRET_KEY: ${CERBERUS_SECRET_KEY:-}
       CERBERUS_DATABASE_URL: sqlite:////data/cerberus.db
     volumes:
       - cerberus-data:/data

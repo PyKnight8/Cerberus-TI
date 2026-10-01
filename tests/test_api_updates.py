@@ -12,6 +12,7 @@ from app.feeds.base import utcnow
 from app.feeds.threatfox import ThreatFoxProvider
 from app.feeds.urlhaus import URLhausProvider
 from app.main import create_app
+from app.management import set_password
 from app.models import ProviderState
 from app.services.ingestion import UpdateService
 
@@ -120,12 +121,20 @@ async def test_full_mocked_pipeline_and_overlap(settings):
     settings.threatfox_auth_key = SecretStr("fake-key")
     app = create_app(settings, httpx.MockTransport(handler))
     async with app.router.lifespan_context(app):
+        set_password(app.state.db, "test-password-long")
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
-            assert (await client.post("/api/update")).status_code == 202
+            assert (await client.post("/api/update")).status_code == 401
+            await client.post("/admin/login", data={"password": "test-password-long"})
+            token = app.state.sessions[client.cookies["cerberus_session"]][0]
+            assert (
+                await client.post("/api/update", headers={"X-CSRF-Token": token})
+            ).status_code == 202
             await started.wait()
-            assert (await client.post("/api/update")).status_code == 409
+            assert (
+                await client.post("/api/update", headers={"X-CSRF-Token": token})
+            ).status_code == 409
             # Request remains responsive while HTTP ingestion is waiting.
             assert (await client.get("/health")).status_code == 200
             gate.set()
@@ -152,7 +161,10 @@ def test_expiry_at_read_time_without_updates(settings):
 def test_no_keys_starts_and_records_safe_errors(settings):
     app = create_app(settings)
     with TestClient(app) as client:
-        assert client.post("/api/update").status_code == 202
+        set_password(app.state.db, "test-password-long")
+        client.post("/admin/login", data={"password": "test-password-long"})
+        token = app.state.sessions[client.cookies["cerberus_session"]][0]
+        assert client.post("/api/update", headers={"X-CSRF-Token": token}).status_code == 202
     assert all(
         p["error"] == "missing_api_key" for p in app.state.updates.last_result["providers"].values()
     )

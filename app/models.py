@@ -64,3 +64,73 @@ class ProviderState(Base):
     next_allowed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_error: Mapped[str | None] = mapped_column(String(64))
     counts: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ProviderCredential(Base):
+    __tablename__ = "provider_credentials"
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ciphertext: Mapped[str] = mapped_column(String(4096))
+
+
+class ProviderUsage(Base):
+    __tablename__ = "provider_usage"
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    total_requests: Mapped[int] = mapped_column(Integer, default=0)
+    successful_requests: Mapped[int] = mapped_column(Integer, default=0)
+    failed_requests: Mapped[int] = mapped_column(Integer, default=0)
+    rate_limited_requests: Mapped[int] = mapped_column(Integer, default=0)
+    last_request_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_failure_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_http_status: Mapped[int | None] = mapped_column(Integer)
+
+
+class ProviderKeyCheck(Base):
+    __tablename__ = "provider_key_checks"
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(String(32))
+
+
+class ManagedAllowlist(Base):
+    __tablename__ = "managed_allowlist"
+    domain: Mapped[str] = mapped_column(String(253), primary_key=True)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class AdminAccount(Base):
+    __tablename__ = "admin_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(512))
+
+
+class OperationalEvent(Base):
+    __tablename__ = "operational_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    level: Mapped[str] = mapped_column(String(16))
+    component: Mapped[str] = mapped_column(String(32), index=True)
+    message: Mapped[str] = mapped_column(String(256))
+
+
+class RuntimeSetting(Base):
+    __tablename__ = "runtime_settings"
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+
+
+class SchemaVersion(Base):
+    __tablename__ = "schema_version"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer)
+
+
+class IOCEnrichment(Base):
+    __tablename__ = "ioc_enrichments"
+    ioc_id: Mapped[int] = mapped_column(ForeignKey("iocs.id", ondelete="CASCADE"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
+    result: Mapped[dict] = mapped_column(JSON)
+    queried_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    last_error: Mapped[str | None] = mapped_column(String(64))

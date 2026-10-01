@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import time
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -8,11 +10,26 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.config import HTTPConfig
+from app.config import HTTPConfig, ProviderTimeouts
+
+logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def redact_provider_data(value, key):
+    """Remove a credential echoed anywhere in untrusted provider text."""
+    if isinstance(value, str):
+        return value.replace(key, "[redacted]") if key else value
+    if isinstance(value, list):
+        return [redact_provider_data(item, key) for item in value]
+    if isinstance(value, dict):
+        return {
+            redact_provider_data(k, key): redact_provider_data(v, key) for k, v in value.items()
+        }
+    return value
 
 
 class FeedError(Exception):
@@ -70,13 +87,41 @@ class ThreatIntelProvider(ABC):
     def __init__(self, key: str, limits: HTTPConfig):
         self.key = key
         self.limits = limits
+        self.account_request = None
+        self.timeouts = ProviderTimeouts()
 
-    async def request(self, client: httpx.AsyncClient, method: str, url: str, **kwargs) -> bytes:
+    def http_timeout(self):
+        values = {
+            name: getattr(self.timeouts, name + "_timeout_seconds") or self.limits.timeout_seconds
+            for name in ("connect", "read", "write", "pool")
+        }
+        return httpx.Timeout(**values)
+
+    @property
+    def total_timeout(self):
+        return self.timeouts.total_timeout_seconds or self.limits.total_timeout_seconds
+
+    async def request(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        *,
+        operation: str = "fetch",
+        page: int | None = None,
+        **kwargs,
+    ) -> bytes:
         if not self.key:
             raise FeedError("missing_api_key")
+        started = time.monotonic()
+        status = None
+        succeeded = False
         try:
-            async with asyncio.timeout(self.limits.total_timeout_seconds):
-                async with client.stream(method, url, **kwargs) as response:
+            async with asyncio.timeout(self.total_timeout):
+                async with client.stream(
+                    method, url, timeout=self.http_timeout(), **kwargs
+                ) as response:
+                    status = response.status_code
                     if response.status_code == 429:
                         delay = 300
                         retry = response.headers.get("Retry-After", "")
@@ -100,11 +145,74 @@ class ThreatIntelProvider(ABC):
                         if len(body) + len(chunk) > self.limits.max_response_bytes:
                             raise FeedError("response_too_large")
                         body.extend(chunk)
-                    return bytes(body)
-        except (httpx.TimeoutException, TimeoutError):
-            raise FeedError("timeout") from None
+                    result = bytes(body)
+                    succeeded = True
+                    return result
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            category = next(
+                (
+                    name
+                    for cls, name in (
+                        (httpx.ConnectTimeout, "connect"),
+                        (httpx.ReadTimeout, "read"),
+                        (httpx.WriteTimeout, "write"),
+                        (httpx.PoolTimeout, "pool"),
+                        (TimeoutError, "total"),
+                    )
+                    if isinstance(exc, cls)
+                ),
+                "unknown",
+            )
+            elapsed = round(time.monotonic() - started, 3)
+            logger.warning(
+                "provider=%s operation=%s page=%s timeout_category=%s elapsed_seconds=%.3f",
+                self.name,
+                operation,
+                page,
+                category,
+                elapsed,
+            )
+            error = FeedError("timeout")
+            error.diagnostics = {
+                "operation": operation,
+                "page": page,
+                "timeout_category": category,
+                "elapsed_seconds": elapsed,
+            }
+            raise error from None
+        except FeedError as error:
+            error.diagnostics = {
+                "operation": operation,
+                "page": page,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            }
+            logger.warning(
+                "provider=%s operation=%s page=%s error=%s elapsed_seconds=%.3f",
+                self.name,
+                operation,
+                page,
+                error.code,
+                error.diagnostics["elapsed_seconds"],
+            )
+            raise
         except httpx.HTTPError:
-            raise FeedError("network_error") from None
+            error = FeedError("network_error")
+            error.diagnostics = {
+                "operation": operation,
+                "page": page,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            }
+            logger.warning(
+                "provider=%s operation=%s page=%s error=network_error elapsed_seconds=%.3f",
+                self.name,
+                operation,
+                page,
+                error.diagnostics["elapsed_seconds"],
+            )
+            raise error from None
+        finally:
+            if self.account_request:
+                await asyncio.to_thread(self.account_request, self.name, succeeded, status)
 
     @abstractmethod
     async def fetch(self, client: httpx.AsyncClient) -> bytes:

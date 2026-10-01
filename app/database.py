@@ -52,6 +52,14 @@ class Database:
         self.session = sessionmaker(self.engine, expire_on_commit=False)
 
     def initialize(self):
-        from app import models  # noqa: F401
+        from app import models
 
         Base.metadata.create_all(self.engine)
+        # Milestone 1 has no version table. The new tables are additive; create_all
+        # preserves every IOC and observation, then records the current schema.
+        with self.session.begin() as session:
+            row = session.get(models.SchemaVersion, 1)
+            if row is None:
+                session.add(models.SchemaVersion(id=1, version=3))
+            elif row.version < 3:
+                row.version = 3

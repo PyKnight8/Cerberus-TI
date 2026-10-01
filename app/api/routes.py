@@ -54,7 +54,7 @@ def stats(request: Request):
         )
         provider_states = {p.source: p for p in session.scalars(select(ProviderState))}
         sources = {}
-        for name in ("urlhaus", "threatfox"):
+        for name in ("urlhaus", "threatfox", "otx"):
             p = provider_states.get(name)
             sources[name] = {
                 "enabled": getattr(state.settings.providers, name).enabled,
@@ -117,6 +117,12 @@ def lookup(ioc: str, request: Request):
 
 @api.post("/update", response_model=UpdateOut, status_code=202)
 async def update(request: Request):
+    from app.web import authenticated, valid_csrf
+
+    if not authenticated(request):
+        raise HTTPException(401, "administrator login required")
+    if not valid_csrf(request, request.headers.get("X-CSRF-Token", "")):
+        raise HTTPException(403, "invalid CSRF token")
     if not request.app.state.updates.trigger():
         return JSONResponse(
             {"status": "already_running", "status_url": "/api/stats"}, status_code=409

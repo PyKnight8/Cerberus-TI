@@ -1,0 +1,15 @@
+<section class="card vt-panel">
+<div class="line"><div><p class="eyebrow">ON-DEMAND INVESTIGATION</p><h2>VirusTotal Enrichment</h2></div><span class="badge {{ 'warning' if vt_stale else 'good' }}">{{ 'Stale cache' if vt_stale else ('Cached' if vt else 'Not queried') }}</span></div>
+<p class="muted">Investigation context only. VirusTotal results do not change Cerberus blocking policy.</p>
+{% if not vt_configured %}<p>VirusTotal enrichment is not configured.</p><a href="/admin/api-keys">Configure in API Keys →</a>{% else %}
+<form method="post" action="/admin/iocs/{{ ioc_id }}/virustotal"><input type="hidden" name="csrf" value="{{ csrf }}">{% if vt %}<input type="hidden" name="refresh" value="yes">{% endif %}<button>{{ 'Refresh from VirusTotal' if vt else 'Query VirusTotal' }}</button></form>{% endif %}
+{% if vt %}
+<p class="muted">Last queried at {{ vt.queried_at }} · Cache age {{ vt_age }} hours · Expires {{ vt.expires_at }}</p>
+{% if vt.last_error %}<div class="notice">The last query failed ({{ vt.last_error }}). Showing the previous cached result.</div>{% endif %}
+{% if vt.result.total %}<div class="vt-ratio"><strong>{{ vt.result.flagged }} <span>/ {{ vt.result.total }}</span></strong><p>engines flagged this indicator as malicious or suspicious</p></div>
+<svg class="detection-bar" viewBox="0 0 100 4" role="img" aria-label="Engine detection categories"><title>Detection summary</title>{% set bar = namespace(x=0) %}{% for category,count in vt.result.stats.items() %}{% set width = count / vt.result.total * 100 %}<rect x="{{ bar.x }}" y="0" width="{{ width }}" height="4" class="{{ category if category in ['malicious','suspicious','harmless','undetected'] else 'other' }}"><title>{{ category }}: {{ count }}</title></rect>{% set bar.x = bar.x + width %}{% endfor %}</svg>
+<div class="metrics vt-metrics">{% for category,count in vt.result.stats.items() %}<article class="verdict-{{ category }}"><span>{{ category|replace('-',' ')|title }}</span><strong>{{ count }}</strong></article>{% endfor %}</div>{% else %}<p>No engine detection statistics were returned.</p>{% endif %}
+<div class="vt-context">{% for label,value in vt.result.context.items() %}{% if label != 'whois' %}<div><span class="muted">{{ ('VirusTotal reputation' if label == 'reputation' else label|replace('_',' ')|title) }}</span><p>{{ value }}</p></div>{% endif %}{% endfor %}</div>
+{% if vt.result.context.get('whois') %}<details><summary>WHOIS / registration context</summary><pre>{{ vt.result.context.whois }}</pre></details>{% endif %}
+<details><summary>Engine breakdown · {{ vt.result.engines|length }} results</summary><div class="table-wrap"><table><thead><tr><th>Engine</th><th>Category</th><th>Result</th></tr></thead><tbody>{% for engine in vt.result.engines %}<tr><td>{{ engine.engine }}</td><td><span class="badge {{ 'bad' if engine.category == 'malicious' else ('warning' if engine.category == 'suspicious' else '') }}">{{ engine.category }}</span></td><td>{{ engine.result }}</td></tr>{% endfor %}</tbody></table></div><p class="muted">Showing up to 200 engine results.</p></details>
+{% endif %}</section>

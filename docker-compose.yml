@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     init: true
     ports:
-      - "${CERBERUS_BIND_IP:-127.0.0.1}:8080:8080"
+      - "${CERBERUS_BIND_IP:-127.0.0.1}:${CERBERUS_PORT:-8180}:8080"
     environment:
       URLHAUS_AUTH_KEY: ${URLHAUS_AUTH_KEY:-}
       THREATFOX_AUTH_KEY: ${THREATFOX_AUTH_KEY:-}

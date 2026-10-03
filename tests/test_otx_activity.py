@@ -51,7 +51,7 @@ async def test_fallback_accounting_persistence_and_recovery(
     assert len({r.url.params["modified_since"] for r in requests}) == 1
     assert "retrieval=activity_fallback" in caplog.text
     with db.session() as session:
-        state = session.get(RuntimeSetting, "otx.retrieval_state").value
+        state = session.get(RuntimeSetting, "otx.retrieval_state").value["value"]
         assert state["retrieval"] == "activity fallback"
         assert state["subscribed_retry_after"]
         cursor = session.get(RuntimeSetting, "otx.modified_since").value["value"]
@@ -68,14 +68,16 @@ async def test_fallback_accounting_persistence_and_recovery(
     with db.session.begin() as session:
         row = session.get(RuntimeSetting, "otx.retrieval_state")
         row.value = {
-            **row.value,
-            "subscribed_retry_after": (utcnow() - timedelta(seconds=1)).isoformat(),
+            "value": {
+                **row.value["value"],
+                "subscribed_retry_after": (utcnow() - timedelta(seconds=1)).isoformat(),
+            }
         }
     broken[0] = False
     await service._run()
     assert len(requests) == 6 and requests[-1].url.path.endswith("subscribed")
     with db.session() as session:
-        assert session.get(RuntimeSetting, "otx.retrieval_state").value == {
+        assert session.get(RuntimeSetting, "otx.retrieval_state").value["value"] == {
             "retrieval": "subscribed"
         }
         assert session.get(ProviderUsage, "otx").total_requests == 6
@@ -95,7 +97,7 @@ async def test_both_endpoints_fail_bounded_no_checkpoint(db, settings, retry_wai
     with db.session() as session:
         assert session.get(RuntimeSetting, "otx.modified_since") is None
         assert (
-            session.get(RuntimeSetting, "otx.retrieval_state").value["retrieval"]
+            session.get(RuntimeSetting, "otx.retrieval_state").value["value"]["retrieval"]
             == "activity fallback"
         )
         assert session.get(ProviderUsage, "otx").failed_requests == 6
@@ -117,7 +119,10 @@ async def test_healthy_strategy(db, settings, retry_waits, strategy):
     assert len(requests) == 1 and requests[0].url.path.endswith(expected)
     assert retry_waits == []
     with db.session() as session:
-        assert session.get(RuntimeSetting, "otx.retrieval_state").value["retrieval"] == expected
+        assert (
+            session.get(RuntimeSetting, "otx.retrieval_state").value["value"]["retrieval"]
+            == expected
+        )
 
 
 @pytest.mark.parametrize("initial_days", [90, None])

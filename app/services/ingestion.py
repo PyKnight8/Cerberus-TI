@@ -12,7 +12,7 @@ from app.config import Settings
 from app.database import Database
 from app.feeds.base import FeedError, ParsedFeed, ThreatIntelProvider, utcnow
 from app.feeds.otx import sync_plan
-from app.management import record_event
+from app.management import record_event, runtime_setting_value
 from app.models import IOC, Observation, ProviderState, ProviderUsage, RuntimeSetting
 from app.normalization import normalize
 
@@ -183,7 +183,7 @@ class UpdateService:
         def read():
             with self.db.session() as session:
                 row = session.get(RuntimeSetting, "otx.retrieval_state")
-                return dict(row.value) if row else {}
+                return dict(runtime_setting_value(row, {}))
 
         def write(value):
             if not any(p.name == "otx" and p.key == provider.key for p in self.providers):
@@ -193,7 +193,7 @@ class UpdateService:
                 if row is None:
                     row = RuntimeSetting(name="otx.retrieval_state")
                     session.add(row)
-                row.value = value
+                row.value = {"value": value}
 
         provider.read_retrieval_state = read
         provider.write_retrieval_state = write

@@ -25,7 +25,14 @@ class SourcePolicy(StrictModel):
     allow_unknown_confidence: bool = False
 
 
+class OTXBlockingPolicy(StrictModel):
+    enabled: bool = False
+    official_author_only: bool = True
+    max_age_days: int = Field(default=30, ge=1, le=365)
+
+
 class PolicyConfig(StrictModel):
+    otx: OTXBlockingPolicy = Field(default_factory=OTXBlockingPolicy)
     max_age_days: int = Field(default=7, ge=1, le=365)
     expiration_days: int = Field(default=7, ge=1, le=365)
     sources: dict[str, SourcePolicy] = Field(

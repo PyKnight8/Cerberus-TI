@@ -117,6 +117,7 @@ class OperationalEvent(Base):
 class RuntimeSetting(Base):
     __tablename__ = "runtime_settings"
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Canonical envelope: {"value": payload}; startup upgrades known legacy rows.
     value: Mapped[dict] = mapped_column(JSON)
 
 

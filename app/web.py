@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
+from app.config import OTXBlockingPolicy
 from app.feeds.base import FeedError, utcnow
 from app.feeds.otx import sync_plan
 from app.feeds.registry import make_provider
@@ -20,6 +21,7 @@ from app.management import (
     mask,
     new_session,
     record_event,
+    runtime_setting_value,
     save_runtime_setting,
     set_key,
     sync_allowlist,
@@ -184,7 +186,7 @@ def feeds(request: Request):
         rows = {p.source: p for p in session.scalars(select(ProviderState))}
         checkpoint = session.get(RuntimeSetting, "otx.modified_since")
         retrieval = session.get(RuntimeSetting, "otx.retrieval_state")
-        retrieval_state = dict(retrieval.value) if retrieval else {}
+        retrieval_state = dict(runtime_setting_value(retrieval, {}))
     since, mode = sync_plan(
         state.settings.providers.otx, checkpoint.value["value"] if checkpoint else None, utcnow()
     )
@@ -482,6 +484,35 @@ async def save_settings(request: Request):
     else:
         scheduler.pause_job("feed_update")
     record_event(state.db, "scheduler", "INFO", "Scheduler settings changed")
+    return redirect("settings")
+
+
+@web.post("/admin/settings/otx")
+async def save_otx_policy(request: Request):
+    data = await form_action(request)
+    try:
+        age = int(data.get("max_age_days", ""))
+    except ValueError:
+        raise HTTPException(422, "OTX maximum age must be 1 to 365 days") from None
+    if not 1 <= age <= 365:
+        raise HTTPException(422, "OTX maximum age must be 1 to 365 days")
+    policy = OTXBlockingPolicy(
+        enabled=data.get("enabled") == "on",
+        official_author_only=data.get("official_author_only") == "on",
+        max_age_days=age,
+    )
+    state = request.app.state
+    # Persist all three fields atomically before publishing the runtime policy.
+    with state.db.session.begin() as session:
+        for field, value in policy.model_dump().items():
+            name = f"policy.otx.{field}"
+            row = session.get(RuntimeSetting, name)
+            if row is None:
+                row = RuntimeSetting(name=name)
+                session.add(row)
+            row.value = {"value": value}
+    state.settings.policy.otx = policy
+    record_event(state.db, "policy", "INFO", "OTX DNS blocking policy changed")
     return redirect("settings")
 
 

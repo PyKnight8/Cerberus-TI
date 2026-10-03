@@ -6,6 +6,25 @@ from app.models import IOC, Observation
 from app.normalization import safe_indicator
 
 
+def official_otx_author(metadata: dict) -> bool:
+    """Match exact upstream account names, never pulse titles or display-name substrings."""
+    if not isinstance(metadata, dict):
+        return False
+    names = []
+    if "author_name" in metadata:
+        names.append(metadata["author_name"])
+    author = metadata.get("author")
+    if isinstance(author, dict) and "username" in author:
+        names.append(author["username"])
+    elif isinstance(author, str):
+        names.append(author)
+    elif author is not None and not isinstance(author, dict):
+        return False
+    return bool(names) and all(
+        isinstance(name, str) and name.casefold() in {"alienvault", "levelblue"} for name in names
+    )
+
+
 @dataclass(frozen=True)
 class Decision:
     active: bool
@@ -33,6 +52,19 @@ class BlockingPolicy:
     def evidence_reason(self, observation: Observation, now: datetime) -> str:
         if not self.live(observation, now):
             return "inactive_or_expired"
+        if observation.source == "otx":
+            otx = self.settings.policy.otx
+            if not otx.enabled:
+                return "otx_enforcement_disabled"
+            if observation.last_seen <= now - timedelta(days=otx.max_age_days):
+                return "otx_stale"
+            if otx.official_author_only and not official_otx_author(observation.details):
+                return "otx_untrusted_author"
+            rule = self.settings.policy.sources.get("otx")
+            if not rule or not rule.enabled or not self.settings.providers.otx.enabled:
+                return "source_not_enabled"
+            # Explicit OTX provenance policy, independent of numeric confidence.
+            return "eligible"
         if observation.last_seen <= now - timedelta(days=self.settings.policy.max_age_days):
             return "stale"
         rule = self.settings.policy.sources.get(observation.source)

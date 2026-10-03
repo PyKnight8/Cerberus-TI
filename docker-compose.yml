@@ -14,7 +14,8 @@ services:
       CERBERUS_DATABASE_URL: sqlite:////data/cerberus.db
     volumes:
       - cerberus-data:/data
-      - ./config.yaml:/app/config.yaml:ro
+      # Private SELinux label for this container; config stays read-only.
+      - ./config.yaml:/app/config.yaml:ro,Z
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

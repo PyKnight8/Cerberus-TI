@@ -70,6 +70,80 @@ The container runs as UID/GID 10001, with a read-only application filesystem and
 
 Stop with `docker compose down`; do not add `-v` unless deleting the database is intended. After YAML or environment-key changes run `docker compose up -d --force-recreate`; dashboard-managed keys reload at runtime. Use one replica and one Uvicorn worker.
 
+### Fedora / SELinux deployment
+
+Keep SELinux enabled. Unix permissions such as `0644` can allow reading while
+SELinux still denies the container access, producing `PermissionError` for
+`config.yaml`. The config bind mount uses `./config.yaml:/app/config.yaml:ro,Z`:
+`ro` keeps it read-only inside the container, and `Z` asks Docker to relabel the
+host file for this container's private SELinux access. Lowercase `z` instead
+labels content for sharing between containers; use it only for deliberately
+shared bind mounts. Relabel only dedicated Cerberus paths, not broad host or
+system directories.
+
+The comma-separated short mount syntax is supported by Docker Compose and avoids
+depending on newer long-form `bind.selinux` support. The SELinux option is ignored
+on platforms without SELinux, so the same file works on Ubuntu/Debian hosts and
+Docker Desktop with Linux containers (allow the project path in Desktop's file
+sharing settings if required). See the [Compose mount reference](https://docs.docker.com/reference/compose-file/services/#short-syntax-5).
+These instructions use local `docker compose`, not Swarm `docker stack deploy`.
+Ensure `config.yaml` exists as a regular file before starting: short bind syntax
+can create a directory if the source is missing.
+
+`/data` uses the existing `cerberus-data` named volume, managed and labeled by
+Docker; it needs no host bind relabel option. It remains writable by UID/GID
+10001 and persists SQLite, encrypted provider credentials, administrator records,
+and dashboard settings across rebuilds and container recreation. Keep the same
+Compose project name/directory to reuse that volume, and retain the existing
+`CERBERUS_SECRET_KEY` in `.env` to decrypt credentials. Do not delete the volume
+or run `docker compose down -v` when applying this fix.
+
+If you deliberately replace the named volume with a dedicated host directory,
+use `./data:/data:rw,Z` and ensure its Unix ownership permits UID/GID 10001 to
+write (account for UID mapping with rootless Docker). Relabeling does not fix Unix
+ownership. Do not switch an existing deployment's storage path without migrating
+the complete stopped data volume, including SQLite WAL files. Any additional
+dedicated host bind mounts should likewise use `:ro,Z` or `:rw,Z` as appropriate.
+The `/tmp` tmpfs has no host path to relabel.
+
+Apply this mount-only change from the existing project directory:
+
+```sh
+test -f config.yaml
+docker compose config --quiet
+docker compose up -d --no-build --force-recreate cerberus-ti
+docker compose ps
+docker compose logs --tail=100 cerberus-ti
+```
+
+Only container recreation is required; rebuilding the image or using
+`docker compose restart` does not apply new mount options.
+
+For permission-denied mount failures on Fedora, inspect labels and recent denials:
+
+```sh
+getenforce
+ls -lZ config.yaml
+docker info --format '{{json .SecurityOptions}}'
+docker inspect "$(docker compose ps -aq cerberus-ti)" --format '{{json .Mounts}}'
+sudo ausearch -m AVC,USER_AVC -ts recent
+# Only when using the optional host data bind mount:
+ls -ldZ data
+```
+
+Confirm the config mount is read-only and `/data` is writable. Once startup works,
+check access as the existing non-root application user:
+
+```sh
+docker compose exec cerberus-ti id
+docker compose exec cerberus-ti python -c 'from pathlib import Path; import tempfile; Path("/app/config.yaml").read_bytes(); f = tempfile.TemporaryFile(dir="/data"); f.close(); print("config readable; /data writable")'
+```
+
+If denials remain, check Docker's SELinux support and the source filesystem's
+label support using the commands above. Do not use `chmod 777`, privileged mode,
+a root application user, or disabling SELinux as a workaround. Avoid sharing
+expanded `docker compose config` output because it includes environment secrets.
+
 ## Running locally
 
 PowerShell, from the repository:
@@ -238,9 +312,14 @@ only their validated host, with the original URL retained in observation metadat
 No IOC URL is fetched. Pulse IDs, names, descriptions, authors, tags, dates and threat
 context are retained within existing metadata bounds. Unsupported hashes/CIDRs are
 counted as ignored; the current domain/IP schema cannot store standalone hash/CIDR
-records. Confidence remains unknown: OTX does not invent a confidence score. The default
-policy rejects unknown-confidence OTX evidence for blocking; administrators can configure
-`policy.sources.otx` using the existing policy architecture if their subscriptions warrant it.
+records. Confidence remains unknown: OTX does not invent a confidence score.
+OTX DNS enforcement is opt-in under **Settings → OTX DNS blocking**, independently
+of ingestion. Defaults are **OFF**, **official-author-only ON**, and **maximum age
+30 days** (range 1–365). With enforcement off, OTX stays stored, searchable and
+available for correlation; independently eligible URLhaus/ThreatFox evidence can
+still block the same IOC. Enabling enforcement evaluates existing observations
+immediately without re-ingestion or restart. Settings persist in the existing
+database runtime-settings table and override these YAML defaults:
 
 ```yaml
 providers:
@@ -248,6 +327,10 @@ providers:
     enabled: true
     max_pages: 100
 policy:
+  otx:
+    enabled: false
+    official_author_only: true
+    max_age_days: 30
   sources:
     otx:
       enabled: true
@@ -256,6 +339,37 @@ policy:
 ```
 
 Existing URLhaus/ThreatFox policy settings should be retained when editing YAML.
+OTX must also be enabled as a provider and in `policy.sources.otx`. OTX enforcement
+uses its explicit provenance policy rather than `min_confidence` or
+`allow_unknown_confidence`; those legacy fields remain accepted for configuration
+compatibility, and other sources still use their normal confidence rules.
+
+Official-author-only matches exact, case-insensitive account names `AlienVault`
+or `LevelBlue` in stored pulse `author_name`, `author.username`, or a string
+`author`. Every available account-name field must match; missing, malformed or
+conflicting identities fail closed. Display names, pulse titles, tags, and
+substring matches do not establish trust. The [official SDK](https://github.com/AlienVault-OTX/OTX-Python-SDK/blob/master/tests/test_client.py)
+uses the `AlienVault` author name. `LevelBlue` is an explicit accepted policy alias;
+this check relies on upstream metadata, not cryptographic author verification.
+Disabling official-only admits community and unknown-author pulses, with the
+remaining safety checks still applied.
+
+OTX enforcement age uses **observation `last_seen`**, derived at ingestion from
+pulse `modified`, falling back to indicator `created`, then pulse `created` when
+needed. Fetch time never renews evidence. Age equal to or greater than the maximum
+is excluded. This replaces the general seven-day freshness check only for OTX;
+stored expiration and configured `policy.expiration_days` still apply (default
+seven days), so the effective lifetime may be shorter than 30 days. Increasing
+OTX maximum age does not revive expired observations. Allowlists, hostname
+validation, special-use exclusions and inactive evidence remain excluded. IPs
+remain intelligence-only. No missing confidence is fabricated.
+
+IOC detail pages show overall blocked status and an OTX source decision:
+enforcement disabled, excessive age, untrusted author, inactive/expired, disabled
+source, or eligible source evidence. Source eligibility is subject to the overall
+allowlist/safety decision shown above it. Existing databases need no new schema
+migration; absent runtime settings use the safe defaults.
+
 Pagination follows the official response `next` parameters after validating HTTPS, the
 exact official host and subscribed-pulse path, forward page movement, and supported query
 parameters. Credentials are never sent to arbitrary pagination destinations.

@@ -1,12 +1,14 @@
 """Small, single-process management services. Secrets never leave this boundary."""
 
+import logging
 import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.feeds.base import utcnow
@@ -120,19 +122,91 @@ def sync_allowlist(db, policy):
     policy.allowlist = frozenset(set(policy.settings.allowlist.domains) | managed)
 
 
+def runtime_setting_value(row, default=None):
+    """Read the canonical envelope and the historical OTX state dictionary."""
+    if row is None:
+        return default
+    if isinstance(row.value, dict) and "value" in row.value:
+        return row.value["value"]
+    return row.value
+
+
 def load_runtime_settings(db, settings):
-    with db.session() as session:
-        values = {r.name: r.value["value"] for r in session.scalars(select(RuntimeSetting))}
-    for name in PROVIDERS:
-        key = f"provider.{name}.enabled"
-        if key in values:
-            getattr(settings.providers, name).enabled = bool(values[key])
-    if "enrichment.cache_ttl_hours" in values:
-        settings.enrichment.cache_ttl_hours = int(values["enrichment.cache_ttl_hours"])
-    if "scheduler.enabled" in values:
-        settings.scheduler.enabled = bool(values["scheduler.enabled"])
-    if "scheduler.interval" in values:
-        settings.scheduler.update_interval_minutes = int(values["scheduler.interval"])
+    """Normalize recognized persisted settings transactionally before consumers start.
+
+    Earlier releases wrote OTX retrieval state as a bare dictionary. Scalar JSON
+    values are also accepted for known settings; unknown rows are left untouched.
+    Validation is per setting so one damaged override cannot discard other values.
+    """
+    targets = {
+        **{
+            f"provider.{name}.enabled": (getattr(settings.providers, name), "enabled")
+            for name in PROVIDERS
+        },
+        "enrichment.cache_ttl_hours": (settings.enrichment, "cache_ttl_hours"),
+        "scheduler.enabled": (settings.scheduler, "enabled"),
+        "scheduler.interval": (settings.scheduler, "update_interval_minutes"),
+        **{
+            f"policy.otx.{field}": (settings.policy.otx, field)
+            for field in type(settings.policy.otx).model_fields
+        },
+    }
+    timestamps = {"otx.modified_since", "enrichment.virustotal.next_allowed_at"}
+    with db.session.begin() as session:
+        for row in session.scalars(select(RuntimeSetting)):
+            if (
+                row.name not in targets
+                and row.name not in timestamps
+                and row.name != "otx.retrieval_state"
+            ):
+                continue
+            value = runtime_setting_value(row)
+            target = targets.get(row.name)
+            fallback = (
+                getattr(target[0], target[1])
+                if target
+                else ({} if row.name == "otx.retrieval_state" else None)
+            )
+            try:
+                if target:
+                    model, field = target
+                    # Pydantic handles bool strings correctly and enforces configured bounds.
+                    if isinstance(value, bool) and not isinstance(fallback, bool):
+                        raise ValueError("boolean is not an integer setting")
+                    validated = type(model).model_validate({**model.model_dump(), field: value})
+                    value = getattr(validated, field)
+                elif row.name in timestamps:
+                    if value is not None:
+                        if not isinstance(value, str):
+                            raise ValueError("timestamp must be a string")
+                        if datetime.fromisoformat(value).tzinfo is None:
+                            raise ValueError("timestamp must have a timezone")
+                elif not isinstance(value, dict):
+                    raise ValueError("retrieval state must be a dictionary")
+                else:
+                    if "retrieval" in value and value["retrieval"] not in (
+                        "subscribed",
+                        "activity",
+                        "activity fallback",
+                    ):
+                        raise ValueError("invalid retrieval mode")
+                    if "subscribed_retry_after" in value:
+                        retry = value["subscribed_retry_after"]
+                        if (
+                            not isinstance(retry, str)
+                            or datetime.fromisoformat(retry).tzinfo is None
+                        ):
+                            raise ValueError("invalid retry timestamp")
+            except (ValidationError, ValueError, TypeError):
+                logging.getLogger(__name__).warning(
+                    "Invalid runtime setting %s; using configured/default value", row.name
+                )
+                value = fallback
+            canonical = {"value": value}
+            if row.value != canonical:
+                row.value = canonical
+            if target:
+                setattr(target[0], target[1], value)
 
 
 def save_runtime_setting(db, name, value):

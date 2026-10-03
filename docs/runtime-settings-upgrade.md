@@ -1,8 +1,8 @@
 # Runtime settings compatibility
 
 Startup normalizes recognized runtime settings in a transaction before creating
-providers or the scheduler. No table rebuild or volume reset is needed. The schema
-version remains 3 because table structure is unchanged; normalization runs on each
+providers or the scheduler. No table rebuild or volume reset is needed. Runtime normalization
+does not change table structure (the later GeoIP addition uses schema version 4); it runs on each
 startup and updates only rows whose representation or validated value differs.
 
 Repository history contains two commits. The initial milestone did not have

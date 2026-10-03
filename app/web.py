@@ -1,7 +1,9 @@
 """LAN management UI; all writes require an authenticated session and CSRF token."""
 
 import json
+from datetime import timedelta
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qs, quote
 
 import httpx
@@ -30,6 +32,7 @@ from app.management import (
 from app.models import (
     IOC,
     AdminAccount,
+    IOCGeoIP,
     ManagedAllowlist,
     OperationalEvent,
     ProviderCredential,
@@ -141,32 +144,26 @@ async def logout(request: Request):
 
 
 @web.get("/admin")
-def dashboard(request: Request):
+def dashboard(request: Request, period: Literal["all", "30d"] = "all"):
     if not authenticated(request):
         return RedirectResponse("/admin/login", status_code=303)
     state = request.app.state
     with state.db.session() as session:
-        total = session.scalar(select(func.count()).select_from(IOC)) or 0
-        types = dict(
-            session.execute(select(IOC.ioc_type, func.count()).group_by(IOC.ioc_type)).all()
-        )
         sources = list(session.scalars(select(ProviderState)))
         last_global = max((s.last_attempt for s in sources if s.last_attempt), default=None)
         allowed = session.scalar(select(func.count()).select_from(ManagedAllowlist)) or 0
-        active = blocked = 0
-        now = utcnow()
-        for ioc in session.scalars(ioc_query()).yield_per(500):
-            decision = state.policy.evaluate(ioc, now)
-            active += int(decision.active)
-            blocked += int(decision.blocked)
+    metrics = state.overview.metrics()
+    geography = state.overview.geography(period)
     next_job = state.scheduler.get_job("feed_update") if state.scheduler.running else None
     return page(
         request,
         "Dashboard",
-        total=total,
-        active=active,
-        blocked=blocked,
-        types=types,
+        **metrics,
+        geography=geography,
+        world=state.overview.map_countries(geography),
+        intelligence=state.overview.context(),
+        recent=state.overview.recent(),
+        geoip=state.geoip.status(),
         sources=sources,
         allowed=allowed + len(state.settings.allowlist.domains),
         running=state.updates.running,
@@ -359,12 +356,27 @@ async def remove_key(source: str, request: Request):
 
 
 @web.get("/admin/iocs")
-def iocs(request: Request, q: str = "", page_number: int = 1):
+def iocs(
+    request: Request,
+    q: str = "",
+    page_number: int = 1,
+    country: str = "",
+    period: Literal["all", "30d"] = "all",
+):
     if not authenticated(request):
         return RedirectResponse("/admin/login", status_code=303)
     q = q.strip()[:253]
     page_number = max(1, page_number)
+    country = country.upper()
+    if country and (len(country) != 2 or not country.isascii() or not country.isalpha()):
+        raise HTTPException(422, "invalid country code")
     query = select(IOC)
+    if country:
+        query = query.join(IOCGeoIP, IOCGeoIP.ioc_id == IOC.id).where(
+            IOCGeoIP.country_code == country
+        )
+    if period == "30d":
+        query = query.where(IOC.last_seen >= utcnow() - timedelta(days=30))
     if q:
         query = query.where(IOC.normalized_value.contains(q.replace("%", "\\%"), autoescape=True))
     with request.app.state.db.session() as session:
@@ -372,7 +384,16 @@ def iocs(request: Request, q: str = "", page_number: int = 1):
         rows = list(
             session.scalars(query.order_by(IOC.id.desc()).offset((page_number - 1) * 50).limit(50))
         )
-    return page(request, "IOCs", iocs=rows, q=q, page_number=page_number, total=total)
+    return page(
+        request,
+        "IOCs",
+        iocs=rows,
+        q=q,
+        country=country,
+        period=period,
+        page_number=page_number,
+        total=total,
+    )
 
 
 @web.get("/admin/iocs/{ioc_id}")
@@ -384,11 +405,13 @@ def ioc_detail(ioc_id: int, request: Request):
         if row is None:
             raise HTTPException(404)
         item = describe(row, request.app.state.policy, utcnow())
+        geo = session.get(IOCGeoIP, ioc_id)
     cached = request.app.state.enrichment.cached(ioc_id)
     return page(
         request,
         "IOC Detail",
         item=item,
+        geo=geo,
         metadata=json,
         ioc_id=ioc_id,
         vt=cached,
@@ -452,7 +475,14 @@ async def remove_allowlist(domain: str, request: Request):
 
 @web.get("/admin/settings")
 def settings(request: Request):
-    return page(request, "Settings", config=request.app.state.settings)
+    if not authenticated(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    return page(
+        request,
+        "Settings",
+        config=request.app.state.settings,
+        geoip=request.app.state.geoip.status(),
+    )
 
 
 @web.post("/admin/settings")
@@ -485,6 +515,23 @@ async def save_settings(request: Request):
         scheduler.pause_job("feed_update")
     record_event(state.db, "scheduler", "INFO", "Scheduler settings changed")
     return redirect("settings")
+
+
+@web.post("/admin/settings/geoip/refresh")
+async def refresh_geoip(request: Request):
+    await form_action(request)
+    service = request.app.state.geoip
+    started = service.trigger()
+    notice = (
+        "GeoIP re-enrichment started"
+        if started
+        else (
+            "GeoIP re-enrichment already running"
+            if service.running
+            else "GeoIP database not configured or disabled"
+        )
+    )
+    return redirect("settings", notice)
 
 
 @web.post("/admin/settings/otx")

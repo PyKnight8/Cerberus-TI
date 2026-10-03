@@ -128,3 +128,25 @@ async def update(request: Request):
             {"status": "already_running", "status_url": "/api/stats"}, status_code=409
         )
     return UpdateOut(status="accepted")
+
+
+@api.get("/stats/geo")
+def geo_stats(request: Request, period: Literal["all", "30d"] = "all"):
+    from app.web import authenticated
+
+    if not authenticated(request):
+        raise HTTPException(401, "administrator login required")
+    return {
+        **request.app.state.overview.geography(period),
+        "available": request.app.state.geoip.available,
+        "enabled": request.app.state.geoip.config.enabled,
+    }
+
+
+@api.get("/stats/intelligence")
+def intelligence_stats(request: Request):
+    from app.web import authenticated
+
+    if not authenticated(request):
+        raise HTTPException(401, "administrator login required")
+    return request.app.state.overview.context()

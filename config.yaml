@@ -54,3 +54,10 @@ http:
   max_records: 200000
 logging:
   level: INFO
+
+# Supply local MMDB files yourself; no downloads or external lookups are performed.
+geoip:
+  enabled: true
+  country_database: /data/geoip/GeoLite2-Country.mmdb
+  asn_database: /data/geoip/GeoLite2-ASN.mmdb
+  batch_size: 250

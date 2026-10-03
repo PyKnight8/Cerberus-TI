@@ -11,3 +11,4 @@ starlette>=0.46,<1
 jinja2>=3.1,<4
 cryptography>=43,<50
 argon2-cffi>=23,<26
+maxminddb>=3.0,<4

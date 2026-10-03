@@ -256,7 +256,7 @@ def test_vt_explicit_query_cache_refresh_persistence(settings, caplog):
         assert "Engine breakdown" in client.get("/admin/iocs/1").text
         assert len(calls) == 2
         with client.app.state.db.session() as session:
-            assert session.get(SchemaVersion, 1).version == 3
+            assert session.get(SchemaVersion, 1).version == 4
 
 
 @pytest.mark.parametrize("status", [429, 503, 404, 200])
@@ -400,7 +400,7 @@ def test_schema_two_upgrade_preserves_data_and_is_idempotent(settings):
     db.initialize()
     db.initialize()
     with db.session() as session:
-        assert session.get(SchemaVersion, 1).version == 3
+        assert session.get(SchemaVersion, 1).version == 4
         assert session.get(IOC, 1).normalized_value == "evil.example"
         assert session.scalar(select(func.count()).select_from(Observation)) == 1
         assert session.get(ProviderCredential, "otx").ciphertext == "preserved-encrypted-value"

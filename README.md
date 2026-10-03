@@ -564,3 +564,129 @@ are preserved without inventing missing values. Completed pages survive a later 
 the checkpoint advances only after the whole sync completes. When switching endpoints,
 already-stored observations are deduplicated; the page/record budget includes successful
 pages from both endpoints. The read timeout remains 120 seconds.
+
+## Local GeoIP and Threat Overview
+
+The dashboard's **Geographic distribution of IP IOCs** map shows country
+attribution of known IP infrastructure already stored in Cerberus. It does **not**
+show live attacks, attack trajectories, or an attacker's physical location. GeoIP
+is approximate network/country attribution. Domains are never DNS-resolved for
+this feature, and IOC addresses are never sent to a geolocation service.
+
+Cerberus uses the maintained `maxminddb` Python reader and locally supplied
+MaxMind-compatible databases:
+
+- `GeoLite2-Country.mmdb` (country ISO code/name)
+- `GeoLite2-ASN.mmdb` (ASN number/organization)
+- A compatible `GeoLite2-City.mmdb` may be supplied as `country_database`; only
+  its country fields are used. City/coordinates are not displayed or persisted.
+
+No MMDB files, MaxMind credentials, or license keys are included, downloaded,
+required at build/startup, or stored by Cerberus. Acquire databases separately
+according to their provider's license and download instructions.
+
+### Supplying databases after deployment
+
+1. In the existing Compose project directory, create `geoip/` if needed:
+
+   ```bash
+   mkdir -p geoip
+   ```
+
+2. Copy your separately acquired, **decompressed** files into:
+
+   ```text
+   ./geoip/GeoLite2-Country.mmdb
+   ./geoip/GeoLite2-ASN.mmdb
+   ```
+
+   Either database can be supplied independently. Ensure the directory is
+   searchable and files readable by container UID/GID `10001:10001` (for example,
+   directory permissions `0755` and database files `0644`). Do not change the
+   container to root. Do not put a license key or account credentials here.
+
+3. Enable GeoIP in `config.yaml`:
+
+   ```yaml
+   geoip:
+     enabled: true
+     country_database: /data/geoip/GeoLite2-Country.mmdb
+     asn_database: /data/geoip/GeoLite2-ASN.mmdb
+     batch_size: 250
+   ```
+
+4. Build/deploy from the **same Compose project directory and project name**,
+   retaining your existing `.env` and `CERBERUS_SECRET_KEY`:
+
+   ```bash
+   docker compose build cerberus-ti
+   docker compose up -d --no-deps cerberus-ti
+   docker compose logs --tail=100 cerberus-ti
+   ```
+
+   Compose mounts `./geoip:/data/geoip:ro,Z`. The short-form bind creates an empty
+   directory when absent; an empty directory is valid. The private SELinux label
+   matches the existing Fedora configuration. Docker-managed named-volume
+   persistence, read-only root filesystem, and non-root user are preserved.
+   Ubuntu/Debian and Docker Desktop can use the same mount convention. Local
+   databases are excluded from Git and the Docker build context.
+
+5. Log in and open **Settings → GeoIP**. Check Country/ASN status and build dates,
+   then click **Re-enrich IP IOCs**. Use **Refresh status** to see progress.
+   This action requires administrator authentication and a CSRF token.
+
+After replacing a database, restart Cerberus to reopen the readers, then re-enrich:
+
+```bash
+docker compose restart cerberus-ti
+```
+
+Do not delete/reset the database or use `docker compose down -v`.
+
+### Behavior and performance
+
+Before installing databases, startup, feeds, Pi-hole lists, and the dashboard
+continue normally. Widgets show **GeoIP database not configured** (or disabled)
+and an empty map state. Missing files are normal and cause no warning spam.
+Unreadable, incompatible, or corrupt files show a limited/unavailable status
+without revealing file contents. A failed reader is disabled until restart.
+
+New IP IOCs are enriched after the feed transaction commits. Valid public IPv4
+and IPv6 addresses are supported; private, loopback, link-local, multicast,
+unspecified, documentation, and other existing safety-excluded ranges are never
+looked up. Negative lookups are cached too. No dashboard request performs a
+GeoIP lookup. Country and ASN results remain intelligence only: this feature does
+not change DNS enforcement or implement MikroTik integration.
+
+An additive **schema version 4** migration creates `ioc_geoip`, a singleton
+`geoip_run` status table, and a recent-observation index. Existing credentials,
+administrators, IOCs, observations, enrichment cache, and settings remain intact.
+Country and ASN indexes support aggregation. Each cached result includes a lookup
+time and database build dates/fingerprint; changed databases make touched IPs
+eligible for refresh. Missing one database preserves existing attribution from it.
+
+The re-enrichment job uses keyset pagination and bounded batches, short write
+transactions, and a fixed IOC upper bound. Only one admin job runs at a time.
+Repeated runs are safe; unchanged attribution from the same files is not rewritten.
+On shutdown the current chunk completes; an interrupted run can be triggered again.
+There is no growing job history, network activity, or per-second polling.
+
+The local SVG map is derived from public-domain [Natural Earth geometry](https://www.naturalearthdata.com/about/terms-of-use/).
+It requires no JavaScript, CDN, tile server, or external map API. Hover/focus shows
+country/count and selecting a country filters the paginated IOC browser. Small
+countries absent from the 110m geometry still appear in the country statistics.
+**All** includes historical stored IPs; **30 days** uses IOC `last_seen`, not an
+attack timestamp. Attribution can be outdated; cached data remains visible if a
+reader is later disabled or removed.
+
+The overview also shows top 10 countries/ASNs, IOC type totals, dynamic source
+distribution, top 10 malware families/tags, and 15 recent observations with existing
+DNS policy decisions. Counts represent distinct IOCs per country, ASN, source,
+family, or tag; categories may overlap. Unknown family/tag values are omitted.
+Server-side aggregates send no individual IOC arrays for the map. Geographic and
+policy counters are cached for up to 60 seconds; context/tag aggregates for up to
+5 minutes. Recent observations are limited and read on demand.
+
+Administrator-only aggregate endpoints are `GET /api/stats/geo?period=all|30d`
+and `GET /api/stats/intelligence`, using the dashboard session. Public/internal
+Pi-hole consumption through `/lists/domains.txt` remains unauthenticated.

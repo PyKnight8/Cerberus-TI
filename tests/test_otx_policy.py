@@ -223,7 +223,7 @@ def test_live_settings_blocklist_details_and_persistence(settings):
 
 def test_runtime_settings_compatibility_and_validation(db, settings):
     with db.session() as session:
-        assert session.get(SchemaVersion, 1).version == 3
+        assert session.get(SchemaVersion, 1).version == 4
     load_runtime_settings(db, settings)
     assert not settings.policy.otx.enabled
     save_runtime_setting(db, "policy.otx.max_age_days", 12)

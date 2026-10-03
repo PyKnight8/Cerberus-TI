@@ -135,3 +135,33 @@ class IOCEnrichment(Base):
     queried_at: Mapped[datetime] = mapped_column(UTCDateTime())
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     last_error: Mapped[str | None] = mapped_column(String(64))
+
+
+class IOCGeoIP(Base):
+    """One cached local attribution per IP, including unsuccessful lookups."""
+
+    __tablename__ = "ioc_geoip"
+    ioc_id: Mapped[int] = mapped_column(ForeignKey("iocs.id", ondelete="CASCADE"), primary_key=True)
+    country_code: Mapped[str | None] = mapped_column(String(2), index=True)
+    country_name: Mapped[str | None] = mapped_column(String(128))
+    asn: Mapped[int | None] = mapped_column(Integer, index=True)
+    asn_organization: Mapped[str | None] = mapped_column(String(256))
+    enriched_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    database_version: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    __table_args__ = (CheckConstraint("status IN ('matched','no_result','excluded')"),)
+
+
+class GeoIPRun(Base):
+    """Latest bounded batch run; no growing job-history table."""
+
+    __tablename__ = "geoip_run"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(String(16))
+    processed: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+
+
+Index("ix_observations_recent", Observation.fetched_at, Observation.id)

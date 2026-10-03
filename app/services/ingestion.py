@@ -6,6 +6,7 @@ from datetime import timedelta
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from app.config import Settings
@@ -26,6 +27,7 @@ def store_feed(
     feed: ParsedFeed,
     started: float | None = None,
     mark_success: bool = True,
+    geoip=None,
 ) -> dict:
     """Commit a whole provider batch atomically. External IDs preserve distinct evidence."""
     now = utcnow()
@@ -123,6 +125,15 @@ def store_feed(
         if started is not None:
             counts["duration_seconds"] = round(time.monotonic() - started, 3)
         state.counts = counts
+    if geoip is not None:
+        # The feed transaction is committed first; geolocation never changes IOC policy.
+        try:
+            geoip.enrich_ids(
+                [ioc.id for ioc in existing.values() if ioc.ioc_type in ("ipv4", "ipv6")]
+            )
+        except SQLAlchemyError:
+            logger.warning("GeoIP cache persistence failed; committed feed data retained")
+
     return counts
 
 
@@ -135,14 +146,19 @@ class UpdateService:
         settings: Settings,
         providers: list[ThreatIntelProvider],
         transport: httpx.AsyncBaseTransport | None = None,
+        geoip=None,
     ):
         self.db, self.settings, self.providers = db, settings, providers
         self.transport = transport
+        self.geoip = geoip
         self.task: asyncio.Task | None = None
         self.last_result: dict | None = None
         self.trigger_notice = ""
         for provider in providers:
             self._bind_retrieval_state(provider)
+
+    def _store_feed(self, *args):
+        return store_feed(*args, geoip=self.geoip)
 
     def account_request(self, source, successful, status):
         now = utcnow()
@@ -334,7 +350,7 @@ class UpdateService:
                                 pages = provider.pages(client)
                             async for feed in pages:
                                 batch = await asyncio.to_thread(
-                                    store_feed,
+                                    self._store_feed,
                                     self.db,
                                     self.settings,
                                     provider.name,
@@ -374,7 +390,7 @@ class UpdateService:
                             body = await provider.fetch(client)
                             feed = await asyncio.to_thread(provider.parse, body)
                             counts = await asyncio.to_thread(
-                                store_feed,
+                                self._store_feed,
                                 self.db,
                                 self.settings,
                                 provider.name,

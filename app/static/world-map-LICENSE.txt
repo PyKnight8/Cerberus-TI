@@ -1,0 +1,10 @@
+World map derived from Natural Earth 1:110m admin-0 countries, public domain.
+Made with Natural Earth. https://www.naturalearthdata.com/
+Terms: https://www.naturalearthdata.com/about/terms-of-use/
+Source acquired 2026-10-03:
+https://github.com/nvkelso/natural-earth-vector/blob/master/geojson/ne_110m_admin_0_countries.geojson
+Bundled file: world-countries.json (equirectangular SVG paths, rounded coordinates).
+Reproduction: scripts/build_world_map.py accepts a local source GeoJSON.
+Antarctica omitted for the overview; small countries absent from the 110m geometry
+are still included in aggregated country statistics. Boundaries are approximate
+Natural Earth de facto boundaries and imply no political position.

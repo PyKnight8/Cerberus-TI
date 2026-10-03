@@ -13,7 +13,9 @@ from app.feeds.registry import make_provider
 from app.management import PROVIDERS, cipher, get_key, load_runtime_settings, sync_allowlist
 from app.policy import BlockingPolicy
 from app.scheduler import create_scheduler
+from app.services.geoip import GeoIPService
 from app.services.ingestion import UpdateService
+from app.services.overview import ThreatOverview
 from app.web import web
 
 
@@ -44,13 +46,17 @@ def create_app(
             for name in PROVIDERS
             if getattr(config.providers, name).enabled
         ]
-        updates = UpdateService(db, config, providers, transport)
+        geoip = GeoIPService(db, config.geoip)
+        updates = UpdateService(db, config, providers, transport, geoip=geoip)
         for provider in providers:
             provider.account_request = updates.account_request
         application.state.settings = config
         application.state.db = db
         application.state.policy = BlockingPolicy(config)
         sync_allowlist(db, application.state.policy)
+        application.state.geoip = geoip
+        application.state.overview = ThreatOverview(db, application.state.policy)
+        geoip.on_change = application.state.overview.invalidate
         application.state.updates = updates
         application.state.crypto = crypto
         application.state.sessions = {}
@@ -69,6 +75,7 @@ def create_app(
             if scheduler.running:
                 scheduler.shutdown(wait=False)
             await updates.close()
+            await geoip.close()
             db.engine.dispose()
 
     application = FastAPI(title="Cerberus-TI", version="0.1.0", lifespan=lifespan)
@@ -76,7 +83,7 @@ def create_app(
     @application.middleware("http")
     async def security_headers(request, call_next):
         response = await call_next(request)
-        if request.url.path.startswith("/admin"):
+        if request.url.path.startswith(("/admin", "/api/stats/")):
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["X-Frame-Options"] = "DENY"

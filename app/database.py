@@ -55,11 +55,16 @@ class Database:
         from app import models
 
         Base.metadata.create_all(self.engine)
+        # create_all does not add indexes to existing tables. This additive index
+        # keeps the recent-intelligence query bounded on persistent installations.
+        next(
+            i for i in models.Observation.__table__.indexes if i.name == "ix_observations_recent"
+        ).create(self.engine, checkfirst=True)
         # Milestone 1 has no version table. The new tables are additive; create_all
         # preserves every IOC and observation, then records the current schema.
         with self.session.begin() as session:
             row = session.get(models.SchemaVersion, 1)
             if row is None:
-                session.add(models.SchemaVersion(id=1, version=3))
-            elif row.version < 3:
-                row.version = 3
+                session.add(models.SchemaVersion(id=1, version=4))
+            elif row.version < 4:
+                row.version = 4

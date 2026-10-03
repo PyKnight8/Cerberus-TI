@@ -135,7 +135,7 @@ def test_additive_migration_keeps_milestone_one_data(settings):
         assert (
             session.scalar(text("SELECT normalized_value FROM iocs WHERE id=7")) == "legacy.example"
         )
-        assert session.get(SchemaVersion, 1).version == 3
+        assert session.get(SchemaVersion, 1).version == 4
     db.engine.dispose()
 
 

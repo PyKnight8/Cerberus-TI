@@ -95,6 +95,13 @@ class EnrichmentConfig(StrictModel):
     cache_ttl_hours: int = Field(default=24, ge=1, le=720)
 
 
+class GeoIPConfig(StrictModel):
+    enabled: bool = False
+    country_database: str = "/data/geoip/GeoLite2-Country.mmdb"
+    asn_database: str = "/data/geoip/GeoLite2-ASN.mmdb"
+    batch_size: int = Field(default=250, ge=10, le=1000)
+
+
 class ProvidersConfig(StrictModel):
     otx: OTXConfig = Field(default_factory=OTXConfig)
     urlhaus: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -121,6 +128,7 @@ class Settings(StrictModel):
     http: HTTPConfig = Field(default_factory=HTTPConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
+    geoip: GeoIPConfig = Field(default_factory=GeoIPConfig)
     otx_auth_key: SecretStr = Field(default=SecretStr(""), exclude=True)
     virustotal_auth_key: SecretStr = Field(default=SecretStr(""), exclude=True)
     urlhaus_auth_key: SecretStr = Field(default=SecretStr(""), exclude=True)

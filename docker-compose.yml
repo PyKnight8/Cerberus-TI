@@ -16,6 +16,8 @@ services:
       - cerberus-data:/data
       # Private SELinux label for this container; config stays read-only.
       - ./config.yaml:/app/config.yaml:ro,Z
+      # Empty directory is valid; Compose creates it when absent. No database download.
+      - ./geoip:/data/geoip:ro,Z
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
